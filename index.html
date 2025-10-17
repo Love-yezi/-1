@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Mapbox | Aotearoa New Zealand History Map (incl. "Today in New Zealand History")</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { position: absolute; inset: 0; }
+
+    /* Info panel (slide-in) */
+    #info-panel {
+      position: absolute; top: 0; left: 0; width: 300px; height: 100%;
+      background: rgba(255,255,255,0.96);
+      box-shadow: 2px 0 5px rgba(0,0,0,0.2);
+      padding: 16px 16px 80px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      overflow-y: auto;
+      transform: translateX(-100%);
+      opacity: 0; pointer-events: none;
+      transition: transform .35s cubic-bezier(.22,1,.36,1), opacity .28s ease;
+      z-index: 999;
+    }
+    #info-panel.show { transform: translateX(0); opacity: 1; pointer-events: auto; }
+    #info-panel h2 { margin: 0 0 6px; font-size: 18px; color: #111; }
+    #info-panel .meta { color:#555; font-size: 12px; margin-bottom:10px }
+
+    /* Top-right X button */
+    .panel-x{
+      position:absolute; top:10px; right:10px;
+      width:32px; height:32px; border:none;
+      background:rgba(17,24,39,.9); color:#fff;
+      border-radius:6px; cursor:pointer; font-size:18px;
+      line-height:32px; text-align:center;
+      display:flex; align-items:center; justify-content:center;
+      box-shadow:0 2px 6px rgba(0,0,0,.15);
+      transition: transform .15s ease, filter .15s ease;
+    }
+    .panel-x:hover{ filter:brightness(1.1); transform:scale(1.05) }
+
+    .tag { display:inline-block; padding:2px 6px; margin-right:6px; margin-top:6px; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:11px }
+
+    /* Legend */
+    .legend { position:absolute; right:10px; top:10px; background:rgba(255,255,255,.95); padding:10px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.15); font-size:12px; z-index: 3 }
+    .legend .row { display:flex; align-items:center; gap:8px; margin:6px 0 }
+    .dot { width:10px; height:10px; border-radius:50% }
+
+    /* Toolbar */
+    .toolbar { position:absolute; left:10px; top:10px; display:flex; gap:8px; z-index: 3; align-items:center }
+    .toolbtn { padding:8px 10px; background:#111827; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px }
+    .toolbtn:hover { filter: brightness(1.1) }
+    .toolbtn.active { background:#374151 }
+
+    /* Travel mode select + clear */
+    .mode-select { padding:8px; border-radius:6px; border:1px solid #e5e7eb; background:#fff; font-size:12px }
+    .clearbtn { padding:8px 10px; background:#6b7280; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px }
+    .clearbtn:hover { filter:brightness(1.05) }
+
+    /* Video button */
+    .video-btn { display:block; margin-top:8px; padding:10px 12px; background:#111827; color:#fff; border-radius:8px; text-decoration:none; box-shadow:0 2px 8px rgba(0,0,0,.08); transition: transform .15s ease, box-shadow .2s ease }
+    .video-btn:hover { transform: translateY(-1px) scale(1.02); box-shadow: 0 6px 16px rgba(0,0,0,.12) }
+    .video-btn:active { transform: scale(.98) }
+
+    /* Historic opacity slider */
+    .opacity-wrap { display:none; align-items:center; gap:8px; background:rgba(255,255,255,.95); padding:6px 10px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.15) }
+    .opacity-wrap.show { display:flex; }
+    .opacity-wrap label { font-size:12px; color:#111; white-space:nowrap }
+
+    /* SVG pin (animate inner only) */
+    .pin { width:28px; height:36px; cursor:pointer; }
+    .pin-inner { width:100%; height:100%; transform-origin:50% 92%; transition: filter .18s ease; will-change: transform; }
+    .pin-inner:hover { filter: drop-shadow(0 4px 8px rgba(0,0,0,.2)) }
+    .pin-inner.pulse { animation: pin-bounce .28s ease-out 1 }
+
+    @keyframes pin-bounce { 0%{ transform:scale(1) } 50%{ transform:scale(1.12) } 100%{ transform:scale(1) } }
+
+    /* Top snackbar */
+    .snack {
+      position:absolute; top:58px; left:50%; transform:translateX(-50%);
+      padding:8px 12px; background:rgba(17,24,39,.92); color:#fff; border-radius:8px;
+      font-size:12px; z-index:5; box-shadow:0 2px 8px rgba(0,0,0,.15); display:none;
+    }
+    .snack.show{ display:block }
+    /* Panel action button */
+    .nav-btn{
+      display:inline-block; margin-top:10px; padding:8px 10px; background:#2563eb; color:#fff;
+      border:none; border-radius:6px; cursor:pointer; font-size:12px
+    }
+    .nav-btn:hover{ filter:brightness(1.05) }
+  </style>
+</head>
+<body>
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <button class="toolbtn" id="btn-nz">NZ view</button>
+    <button class="toolbtn" id="btn-akl">Auckland 3D</button>
+    <button class="toolbtn" id="btn-3d">Toggle 3D</button>
+    <button class="toolbtn" id="btn-historic" title="H">Historic map</button>
+    <div class="opacity-wrap" id="opacity-wrap">
+      <label for="opacity">Opacity</label>
+      <input type="range" id="opacity" min="0" max="100" value="85" />
+    </div>
+    <!-- travel mode + clear -->
+    <select id="mode" class="mode-select" title="Travel mode">
+      <option value="driving">Driving</option>
+      <option value="walking">Walking</option>
+      <option value="cycling">Cycling</option>
+    </select>
+    <button class="clearbtn" id="btn-clear">Clear route</button>
+  </div>
+
+  <!-- Hint snackbar -->
+  <div id="snack" class="snack">Click the map to pick a start point…</div>
+
+  <!-- Info panel -->
+  <div id="info-panel">
+    <button id="panel-x" class="panel-x" aria-label="Close panel">×</button>
+    <h2 id="place-title"></h2>
+    <div class="meta" id="place-meta"></div>
+    <p id="place-desc"></p>
+    <div id="place-tags"></div>
+    <button id="panel-nav" class="nav-btn" style="display:none">Start navigation</button>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="row"><span class="dot" style="background:#e11d48"></span> Modern landmark (reference)</div>
+    <div class="row"><span class="dot" style="background:#16a34a"></span> Important pā / maunga (volcanic cones)</div>
+    <div class="row"><span class="dot" style="background:#2563eb"></span> Key site / event</div>
+    <div class="row"><span class="dot" style="background:#7c3aed"></span> Traditional portage Te Tō Waka (line)</div>
+  </div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+  <script>
+    mapboxgl.accessToken = 'pk.eyJ1IjoibG92ZXllemkiLCJhIjoiY21lZ3p4dG82MDJxcjJsb2ptaDdqdWoyMCJ9.cTZvFs0btK7TAqPOb2clnQ';
+    const nzBounds = [ [166.0, -47.5], [179.0, -33.0] ];
+
+    /* ===== Historic overlay config ===== */
+    const HISTORIC_IMAGE_URL = 'https://i.imgur.com/rZ4hMCH.jpeg'; // 你的旧图
+    const HISTORIC_IMAGE_CORNERS = [
+      [166.0, -33.0],
+      [179.0, -33.0],
+      [179.0, -47.5],
+      [166.0, -47.5]
+    ];
+
+    let isHistoricOn = false;
+    let historicOpacity = 0.85; // 0~1
+    let is3D = false;
+
+    /* ===== Routing state ===== */
+    let geolocate;                       // control
+    let userPosition = null;             // [lng, lat]
+    let pendingPickStart = false;        // waiting for user click to set origin
+    let currentDestination = null;       // [lng, lat]
+    let lastOpenedSite = null;           // site object
+    let originMarker = null, destMarker = null;
+
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [174.76, -36.86],
+      zoom: 10.8,
+      pitch: 0,
+      bearing: 0,
+      maxBounds: nzBounds
+    });
+
+    // ------ Sites (Auckland focus + national key events) ------
+    const sites = [
+      { id: 'skytower', name: 'Auckland Sky Tower (reference)', coords: [174.76219, -36.84845], color: '#e11d48', meta: 'Modern landmark / 328 m', tags: ['Reference'], desc: 'Used as a reference point. The main historical events occurred at the pre-European pā and portage routes across the Tāmaki Makaurau isthmus.', videos:[{title:'Shifting Grounds: Deep Histories of Tāmaki Makaurau (overview)', url:'https://www.youtube.com/watch?v=guuU2o78O4w'}] },
+      { id: 'maungakiekie', name: 'Maungakiekie / One Tree Hill', coords: [174.776, -36.902], color: '#16a34a', meta: 'Waiohua alliance centre pā; later under Ngāti Whātua', tags:['pā','Waiohua','Ngāti Whātua'], desc:'One of the largest pā and agricultural centres in pre-European Tāmaki; Waiohua peaked in the 17th–18th centuries. Around the 1740s, after chief Kiwi Tāmaki’s defeat, influence shifted to Ngāti Whātua.', videos:[{title:'Roadside Stories: Maungakiekie / One Tree Hill (NZHistory)', url:'https://nzhistory.govt.nz/media/video/maungakiekie-one-tree-hill-roadside-stories'},{title:'Pā on One Tree Hill (Te Ara video)', url:'https://teara.govt.nz/en/video/37081/pa-on-one-tree-hill'}] },
+      { id: 'maungawhau', name: 'Maungawhau / Mount Eden', coords: [174.764, -36.879], color: '#16a34a', meta: 'Huakaiwaka (Waiohua ancestor) stronghold; extensive terracing', tags:['pā','Waiohua'], desc:'Major Waiohua stronghold with multiple ditches and terracing; brought within Ngāti Whātua influence by the mid-18th century.', videos:[{title:'Explore the history of Maungawhau (Auckland Council – heritage hīkoi)', url:'https://www.facebook.com/aklcouncil/videos/explore-the-rich-history-of-mt-eden-village-and-maungawhau-come-along-on-a-herit/593513749685124/'}] },
+      { id: 'maungarei', name: 'Maungarei / Mount Wellington', coords: [174.847, -36.893], color: '#16a34a', meta: 'Ngāi Tai ki Tāmaki / Te Waiōhua connections; dense storage-pit remains', tags:['pā','Storage pits'], desc:'“The watchful mountain”; slopes preserve numerous food storage pits and house terraces; long-term stronghold and cultivation hub.', videos:[{title:'Maungarei (Mount Wellington) – Māori history & visit', url:'https://www.youtube.com/watch?v=vfIs5euz2yI'}] },
+      { id: 'pukekawa', name: 'Pukekawa / Auckland Domain', coords: [174.776, -36.865], color: '#2563eb', meta: 'Ancient volcanic cone and settlement; “bitter hill” memory', tags:['Settlement','Conflict memory'], desc:'Taken as “bitter hill,” recalling inter-tribal conflict in the late 18th–early 19th centuries (including Ngāpuhi raids, 1821–22); on the isthmus axis near early routes.', videos:[{title:'CSI: Pukekawa (Auckland Museum – education talk)', url:'https://www.ndf.org.nz/ndf-videos/v/g5cejztrnbz858834bta5jjnh64heh'}] },
+      { id: 'maungauika', name: 'Maungauika / North Head (Devonport)', coords: [174.8122, -36.8275], color: '#16a34a', meta: 'Harbour-mouth vantage; early gardens and anchorage traditions', tags:['Harbour mouth','Gardens'], desc:'At the north head of the Waitematā Harbour entrance; traditions link it to Tainui migrations. Gardens and fish-drying once lined the lower slopes—an important node for the channel and fisheries.', videos:[{title:'North Head Historic Reserve (overview)', url:'https://www.youtube.com/watch?v=rUVaRrA7NAo'}] },
+      { id: 'mangereInlet', name: 'Māngere Inlet / Onehunga side', coords: [174.784, -36.928], color: '#2563eb', meta: 'Manukau inner harbour; gateway to the west', tags:['Harbour','Route'], desc:'Linked to the Tāmaki River on the east via traditional portage, forming a strategic corridor between the Tasman and the Hauraki Gulf/Pacific.', videos:[{title:'The Manukau Harbour: through our eyes (Auckland Council)', url:'https://www.youtube.com/watch?v=pznKW9iyWjM'},{title:'Heritage hīkoi: Onehunga & Royal Oak (Auckland Council)', url:'https://www.facebook.com/aklcouncil/videos/discover-the-hidden-stories-of-onehunga-and-royal-oak-on-a-heritage-hikoiaucklan/367423029783944/'}] },
+      { id: 'otahuhuPortage', name: 'Ōtāhuhu Portage / Te Tō Waka (Portage Rd)', coords: [174.842, -36.944], color: '#2563eb', meta: 'Narrowest overland waka-drag route', tags:['Portage','Te Tō Waka'], desc:'Traditional Te Tō Waka portage linking the Tāmaki River and Manukau Harbour; in war and trade it bypassed dangerous seas and was key to controlling Tāmaki.', videos:[{title:'Portage Crossing Regatta (waka ama tradition)', url:'https://www.facebook.com/tagatapasifikapage/videos/2017-portage-crossing/10155060796270844/'},{title:'33rd Annual Portage Crossing (2025)', url:'https://www.facebook.com/TeamPineula00/videos/33rd-annual-portage-crossing-2025-this-regatta-starts-at-okahu-bay-goes-to-nga-h/9217541728343736/'}] },
+      { id:'waitangi', name:'Waitangi Treaty Grounds', coords:[174.08,-35.26611], color:'#2563eb', meta:'Treaty signing site · 6 Feb 1840', tags:['Treaty of Waitangi','1840'], desc:'Signing of Te Tiriti o Waitangi between Māori rangatira and the British Crown; sheets later travelled nationwide for signatures.', videos:[{title:'Waitangi – Roadside Stories', url:'https://nzhistory.govt.nz/media/video/waitangi-home-treaty-roadside-stories'},{title:'Waitangi Treaty Grounds (overview)', url:'https://www.youtube.com/watch?v=13eCUpR1ve0'}] },
+      { id:'ruapekapeka', name:'Ruapekapeka Pā (Flagstaff War)', coords:[174.1421532,-35.4540193], color:'#16a34a', meta:'Northern War · Jan 1846', tags:['pā','Ngāpuhi','Kawiti'], desc:'Gunfighter pā engineered by Te Ruki Kawiti; endured sustained bombardment.', videos:[{title:'NZ Wars: Ruapekapeka (RNZ)', url:'https://www.youtube.com/watch?v=xdBXuIAIMhE'}] },
+      { id:'rangiriri', name:'Rangiriri (Waikato War)', coords:[175.1351746,-37.4310986], color:'#16a34a', meta:'Battle of Rangiriri · 20 Nov 1863', tags:['Kīngitanga','Waikato War'], desc:'Defensive line with central redoubt; breach opened path south.', videos:[{title:'Rangiriri pā – Roadside Stories', url:'https://nzhistory.govt.nz/media/video/rangiriri-pa-roadside-stories'}] },
+      { id:'orakau', name:'Ōrākau (near Kihikihi)', coords:[175.3914115,-38.0475234], color:'#16a34a', meta:'Battle of Ōrākau · 31 Mar–2 Apr 1864', tags:['Rewi Maniapoto','Waikato War'], desc:'Famed last stand under Rewi Maniapoto.', videos:[{title:'Ōrākau – Roadside Stories', url:'https://nzhistory.govt.nz/media/video/orakau-famed-battle-site-roadside-stories'}] },
+      { id:'gatepa', name:'Gate Pā / Pukehinahina (Tauranga)', coords:[176.1329054,-37.7139456], color:'#16a34a', meta:'Battle of Gate Pā · 29 Apr 1864', tags:['Tauranga Moana','New Zealand Wars'], desc:'British assault repelled by Māori defences.', videos:[{title:'NZ Wars: Tauranga Moana – Gate Pā (RNZ)', url:'https://www.youtube.com/watch?v=WU2QnrXp0vY'}] },
+      { id:'parihaka', name:'Parihaka (Taranaki)', coords:[173.840361,-39.288306], color:'#2563eb', meta:'Pacifist resistance · 1879–1881', tags:['Te Whiti','Tohu Kākahi'], desc:'Non-violent resistance to confiscations; invasion on 5 Nov 1881.', videos:[{title:'Parihaka – remembering the invasion', url:'https://www.youtube.com/watch?v=5g49yD1ix5s'}] },
+      { id:'bastionPoint', name:'Takaparawhā / Bastion Point (Ōrākei)', coords:[174.8242,-36.8464], color:'#2563eb', meta:'Occupation & eviction · 1977–1978', tags:['Ngāti Whātua Ōrākei','Protest'], desc:'506-day occupation; eviction 25 May 1978; land largely returned in 1988.', videos:[{title:'Reclaiming Bastion Point – Roadside Stories', url:'https://nzhistory.net.nz/media/video/reclaiming-bastion-point-roadside-stories'}] },
+      { id:'tangiwai', name:'Tangiwai rail disaster (Whangaehu River)', coords:[175.57667,-39.46417], color:'#2563eb', meta:'24 Dec 1953 · NZ’s worst rail accident', tags:['Disaster','Ruapehu lahar'], desc:'Lahar undermined bridge; 151 lives lost.', videos:[{title:'Tangiwai Bridge Disaster (short documentary)', url:'https://www.youtube.com/watch?v=0dpigDQn0ls'}] },
+      { id:'seacliff', name:'Seacliff Mental Hospital fire (Otago)', coords:[170.623411,-45.677662], color:'#2563eb', meta:'8 Dec 1942 · Deadly institution fire', tags:['Disaster'], desc:'Catastrophic ward fire at Seacliff.', videos:[{title:'Seacliff Asylum – Remnants of the Past', url:'https://www.youtube.com/watch?v=EwGHoX9wflU'}] },
+      { id:'whakaari1914', name:'Whakaari / White Island lahar (1914)', coords:[177.1818954,-37.5210336], color:'#2563eb', meta:'Lahar disaster · Sep 1914', tags:['Volcano'], desc:'1914 lahar killed 10 sulphur miners; active island offshore Whakatāne.', videos:[{title:'White Island – volcano overview', url:'https://www.youtube.com/watch?v=Qw4lbH3REMo'}] }
+    ];
+
+    // ===== 仅在“旧地图开启时”显示的新标签 =====
+    const historicSites = [
+      { id: 'dilworth', name: 'Dilworth Building', coords: [174.766786, -36.844944], color: '#2563eb', meta: 'Customs×Queen · 1927 · Cat I', tags:['Auckland CBD'], desc:'新古典地标，皇后街入口的城市门廊。', videos:[{title:'Wikipedia', url:'https://en.wikipedia.org/wiki/Dilworth_Building'}] },
+      { id: 'oldChoralHall', name: 'Old Choral Hall', coords: [174.770151, -36.851343], color: '#2563eb', meta: '5–7 Symonds St · 1872 · Cat I', tags:['UoA'], desc:'奥克兰早期音乐厅。', videos:[{title:'Wikipedia', url:'https://en.wikipedia.org/wiki/Old_Choral_Hall'}] },
+      { id: 'asb260', name: 'Auckland Savings Bank Building', coords: [174.762607, -36.855126], color: '#2563eb', meta: '260 Queen St · 1884 · Cat I', tags:['Bank'], desc:'皇后街早期银行建筑之一。', videos:[{title:'Wikipedia', url:'https://en.wikipedia.org/wiki/Auckland_Savings_Bank_Building'}] },
+      { id: 'kennethMyers', name: 'Kenneth Myers Centre (1YA)', coords: [174.76936, -36.84674], color: '#2563eb', meta: '74 Shortland St · 1935 · Cat I', tags:['Broadcasting'], desc:'国营电台 1YA 旧址。', videos:[{title:'Wikipedia', url:'https://en.wikipedia.org/wiki/Kenneth_Myers_Centre'}] },
+      { id: 'melanesianMission', name: 'Melanesian Mission House', coords: [174.829558, -36.847317], color: '#2563eb', meta: '40–44 Tamaki Dr · 1859 · Cat I', tags:['Mission Bay'], desc:'都铎复兴石构校舍。', videos:[{title:'Heritage NZ', url:'https://www.heritage.org.nz/list-details/111/Melanesian-Mission-Building-and-Stone-Garden-Walls'}] },
+      { id: 'allendale', name: 'Allendale House', coords: [174.750631, -36.858725], color: '#2563eb', meta: '50 Ponsonby Rd · 1893 · Cat I', tags:['Ponsonby'], desc:'意大利风格住宅。', videos:[{title:'Wikipedia', url:'https://en.wikipedia.org/wiki/Allendale_(house)'}] },
+      { id: 'queensWharf', name: 'Queens Wharf (Auckland waterfront)', coords: [174.7682, -36.8412], color: '#2563eb', meta: 'Quay St · 1900s+', tags:['Waterfront'], desc:'皇后码头。' },
+      { id: 'dunedinStation', name: 'Dunedin Railway Station', coords: [170.509, -45.8759], color: '#2563eb', meta: '1906', tags:['Dunedin'], desc:'弗兰德斯复兴风格地标。', videos:[{title:'Intro video', url:'https://www.youtube.com/watch?v=SNaf1zfvIzQ'}] },
+      { id: 'larnach', name: 'Larnach Castle (Otago Peninsula)', coords: [170.6272, -45.8617], color: '#16a34a', meta: '1870s', tags:['Otago'], desc:'维多利亚时期宅邸与花园。', videos:[{title:'Official videos', url:'https://www.larnachcastle.co.nz/videos'}] },
+      { id: 'tssEarnslaw', name: 'TSS Earnslaw (Queenstown)', coords: [168.7396, -45.0331], color: '#2563eb', meta: '1912', tags:['Queenstown'], desc:'仍在运营的煤火蒸汽船。', videos:[{title:'Cruise video', url:'https://www.youtube.com/watch?v=2GbCcgNBQW8'}] },
+      { id: 'sacredHeartTimaru', name: 'Sacred Heart Basilica (Timaru)', coords: [171.2508, -44.3931], color: '#2563eb', meta: '1911', tags:['Timaru'], desc:'罗马复兴/帕拉第奥式教堂。' },
+      { id: 'stPatricksOamaru', name: 'St Patrick’s Basilica (Oamaru)', coords: [170.9696, -45.09266], color: '#2563eb', meta: '1893–1918', tags:['Oamaru'], desc:'彼得雷代表作。' },
+      { id: 'gablesHospital', name: 'The Gables Colonial Hospital (New Plymouth)', coords: [174.081839, -39.06882], color: '#2563eb', meta: '1848', tags:['New Plymouth'], desc:'早期殖民医院。' },
+      { id: 'gladstoneTimaru', name: 'Gladstone Board of Works (Timaru)', coords: [171.252, -44.396], color: '#2563eb', meta: '19C', tags:['Timaru'], desc:'公共工程局大楼。' },
+      { id: 'addingtonTower', name: 'Addington Water Tower (Christchurch)', coords: [172.616, -43.543], color: '#2563eb', meta: '1883', tags:['Christchurch'], desc:'早期钢筋混凝土。' },
+      { id: 'signOfTheKiwi', name: 'Sign of the Kiwi (Port Hills)', coords: [172.645257, -43.606544], color: '#2563eb', meta: '1917', tags:['Christchurch'], desc:'山脊驿站。' },
+      { id: 'newRegentSt', name: 'New Regent Street (Christchurch)', coords: [172.638763, -43.529450], color: '#2563eb', meta: '1932', tags:['Tram'], desc:'步行街与有轨电车。', videos:[{title:'Tram ride', url:'https://www.youtube.com/watch?v=iHDhaRrq5p0'}] },
+      { id: 'katikiLighthouse', name: 'Katiki Lighthouse (Moeraki)', coords: [170.86621, -45.391926], color: '#2563eb', meta: '1878', tags:['Otago coast'], desc:'历史灯塔。' }
+    ];
+
+    const portageLine = { type:'Feature', geometry:{ type:'LineString', coordinates:[[174.784,-36.928],[174.842,-36.944]] }, properties:{ name:'Te Tō Waka (traditional portage)' } };
+
+    const alwaysMarkers = [];
+    const historicMarkers = [];
+
+    map.on('load', () => {
+      // Portage line
+      map.addSource('portage', { type:'geojson', data: portageLine });
+      map.addLayer({ id:'portage-line', type:'line', source:'portage', paint:{ 'line-color':'#7c3aed','line-width':4,'line-dasharray':[2,2] } });
+
+      // Route source/layer
+      map.addSource('route', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+      map.addLayer({
+        id:'route-line',
+        type:'line',
+        source:'route',
+        layout:{ 'line-cap':'round', 'line-join':'round' },
+        paint:{
+          'line-width': 6,
+          'line-opacity': 0.9,
+          'line-color': ['case',
+            ['==',['get','profile'],'walking'],'#10b981',
+            ['==',['get','profile'],'cycling'],'#06b6d4',
+            /* driving */ '#2563eb'
+          ]
+        }
+      });
+
+      // SVG pins: always visible
+      for (const s of sites) {
+        const el = document.createElement('div');
+        el.className = 'pin';
+        el.innerHTML = '<div class="pin-inner">\
+          <svg viewBox="0 0 28 36" width="28" height="36" aria-hidden="true">\
+            <path d="M14 0C8.477 0 4 4.477 4 10c0 7.5 10 18 10 18s10-10.5 10-18C24 4.477 19.523 0 14 0z" fill="'+s.color+'"/>\
+            <circle cx="14" cy="10" r="5" fill="#fff" fill-opacity=".95"/>\
+            <circle cx="14" cy="10" r="3" fill="'+s.color+'"/>\
+          </svg>\
+        </div>';
+        const inner = el.querySelector('.pin-inner');
+        new mapboxgl.Marker({ element: el, anchor:'bottom' }).setLngLat(s.coords).addTo(map);
+        el.addEventListener('click', () => {
+          inner.classList.remove('pulse'); void inner.offsetWidth; inner.classList.add('pulse');
+          openPanel(s);
+          // Auto-route on click
+          currentDestination = s.coords;
+          lastOpenedSite = s;
+          tryAutoNavigate();
+        });
+        alwaysMarkers.push(el);
+      }
+
+      // Historic-only markers (created hidden)
+      for (const s of historicSites) {
+        const el = document.createElement('div');
+        el.className = 'pin';
+        el.style.display = 'none';
+        el.innerHTML = '<div class="pin-inner">\
+          <svg viewBox="0 0 28 36" width="28" height="36" aria-hidden="true">\
+            <path d="M14 0C8.477 0 4 4.477 4 10c0 7.5 10 18 10 18s10-10.5 10-18C24 4.477 19.523 0 14 0z" fill="'+(s.color||'#2563eb')+'"/>\
+            <circle cx="14" cy="10" r="5" fill="#fff" fill-opacity=".95"/>\
+            <circle cx="14" cy="10" r="3" fill="'+(s.color||'#2563eb')+'"/>\
+          </svg>\
+        </div>';
+        const inner = el.querySelector('.pin-inner');
+        new mapboxgl.Marker({ element: el, anchor:'bottom' }).setLngLat(s.coords).addTo(map);
+        el.addEventListener('click', () => {
+          inner.classList.remove('pulse'); void inner.offsetWidth; inner.classList.add('pulse');
+          openPanel(s);
+          currentDestination = s.coords;
+          lastOpenedSite = s;
+          tryAutoNavigate();
+        });
+        historicMarkers.push(el);
+      }
+
+      // Toolbar
+      document.getElementById('btn-nz').addEventListener('click', () => { fitToAll(false); set3D(false); });
+      document.getElementById('btn-akl').addEventListener('click', () => { flyAuckland3D(); });
+      document.getElementById('btn-3d').addEventListener('click', () => { set3D(!is3D); });
+
+      // Historic toggle + opacity
+      document.getElementById('btn-historic').addEventListener('click', toggleHistoric);
+      document.getElementById('opacity').addEventListener('input', (e) => {
+        historicOpacity = (+e.target.value)/100;
+        if (map.getLayer('historic-layer')) {
+          map.setPaintProperty('historic-layer', 'raster-opacity', historicOpacity);
+        }
+      });
+
+      // Geolocate (GPS)
+      geolocate = new mapboxgl.GeolocateControl({
+        positionOptions: { enableHighAccuracy: true },
+        trackUserLocation: true,
+        showUserHeading: true
+      });
+      map.addControl(geolocate, 'bottom-right');
+      geolocate.on('geolocate', (e) => {
+        userPosition = [e.coords.longitude, e.coords.latitude];
+        if (pendingPickStart && currentDestination) {
+          pendingPickStart = false;
+          hideSnack();
+          routeTo(userPosition, currentDestination);
+        }
+      });
+
+      // Map click to pick manual start when needed
+      map.on('click', (ev) => {
+        if (!pendingPickStart) return;
+        const start = [ev.lngLat.lng, ev.lngLat.lat];
+        pendingPickStart = false;
+        hideSnack();
+        routeTo(start, currentDestination);
+      });
+
+      // Mode change re-route if already have endpoints
+      document.getElementById('mode').addEventListener('change', () => {
+        if (currentDestination) {
+          const start = userPosition || _lastStartFromRoute() || map.getCenter().toArray();
+          routeTo(start, currentDestination);
+        }
+      });
+
+      document.getElementById('btn-clear').addEventListener('click', clearRoute);
+
+      // Panel "Start navigation" button
+      document.getElementById('panel-nav').addEventListener('click', () => {
+        if (!lastOpenedSite) return;
+        currentDestination = lastOpenedSite.coords;
+        tryAutoNavigate(true);
+      });
+
+      // Initial national view
+      fitToAll(false);
+    });
+
+    // 3D layers
+    function add3DLayer(){
+      if (!map.getLayer('sky')) {
+        try { map.addLayer({ id:'sky', type:'sky', paint:{ 'sky-type':'atmosphere', 'sky-atmosphere-sun':[0.0,0.0], 'sky-atmosphere-sun-intensity':15 } }); } catch (e) {}
+      }
+      if (!map.getLayer('3d-buildings')) {
+        let labelLayerId = null;
+        const layers = map.getStyle().layers || [];
+        for (const l of layers) { if (l.type === 'symbol' && l.layout && l.layout['text-field']) { labelLayerId = l.id; break; } }
+        const layerDef = { id:'3d-buildings', source:'composite', 'source-layer':'building', filter:['==','extrude','true'], type:'fill-extrusion', minzoom:14, paint:{ 'fill-extrusion-color':'#aaa', 'fill-extrusion-height':['get','height'], 'fill-extrusion-base':['get','min_height'], 'fill-extrusion-opacity':0.6 } };
+        try { map.addLayer(layerDef, labelLayerId || undefined); } catch (e) { try { map.addLayer(layerDef); } catch(_){} }
+      }
+    }
+
+    function set3D(enabled){
+      is3D = enabled;
+      if (enabled) { add3DLayer(); map.easeTo({ pitch:60, bearing:-17, duration:700 }); }
+      else { map.easeTo({ pitch:0, duration:600 }); }
+    }
+
+    function flyAuckland3D(){
+      add3DLayer();
+      map.easeTo({ center:[174.763,-36.852], zoom:15.6, pitch:60, bearing:-17, duration:1100 });
+      is3D = true;
+    }
+
+    function fitToAll(preserve3d){
+      const all = sites.concat(historicSites);
+      if (!all.length) return;
+      const b = new mapboxgl.LngLatBounds(all[0].coords, all[0].coords);
+      all.forEach(s => b.extend(s.coords));
+      map.fitBounds(b, { padding: 80, duration: 900, maxZoom: 6.5 });
+      if (!preserve3d) is3D = false;
+    }
+
+    function openPanel(site){
+      document.getElementById('place-title').textContent = site.name;
+      document.getElementById('place-meta').textContent = site.meta || '';
+      document.getElementById('place-desc').textContent = site.desc || '';
+      const tagWrap = document.getElementById('place-tags');
+      tagWrap.innerHTML = '';
+      (site.tags || []).forEach(t => { const span = document.createElement('span'); span.className = 'tag'; span.textContent = t; tagWrap.appendChild(span); });
+      document.querySelectorAll('.video-btn').forEach(b => b.remove());
+      (site.videos || []).forEach(v => { const btn = document.createElement('a'); btn.className = 'video-btn'; btn.textContent = 'Watch: '+v.title; btn.href = v.url; btn.target = '_blank'; btn.rel = 'noopener noreferrer'; tagWrap.parentElement.appendChild(btn); });
+      document.getElementById('info-panel').classList.add('show');
+      // show panel "Start navigation"
+      document.getElementById('panel-nav').style.display = 'inline-block';
+    }
+
+    document.getElementById('panel-x').addEventListener('click', () => { document.getElementById('info-panel').classList.remove('show'); });
+
+    /* ===== Historic overlay & markers ===== */
+    function addHistoricOverlay(){
+      if (!map.getSource('historic-image')) {
+        map.addSource('historic-image', {
+          type: 'image',
+          url: HISTORIC_IMAGE_URL,
+          coordinates: HISTORIC_IMAGE_CORNERS
+        });
+      }
+      if (!map.getLayer('historic-layer')) {
+        map.addLayer({
+          id: 'historic-layer',
+          type: 'raster',
+          source: 'historic-image',
+          paint: { 'raster-opacity': historicOpacity }
+        });
+      }
+    }
+    function removeHistoricOverlay(){
+      if (map.getLayer('historic-layer')) map.removeLayer('historic-layer');
+      if (map.getSource('historic-image')) map.removeSource('historic-image');
+    }
+    function showHistoricMarkers(show){
+      for (const el of historicMarkers) el.style.display = show ? 'block' : 'none';
+    }
+    function toggleHistoric(){
+      const btn = document.getElementById('btn-historic');
+      const opw = document.getElementById('opacity-wrap');
+      isHistoricOn = !isHistoricOn;
+      if (isHistoricOn) {
+        addHistoricOverlay();
+        showHistoricMarkers(true);
+        btn.classList.add('active'); opw.classList.add('show');
+      } else {
+        showHistoricMarkers(false);
+        removeHistoricOverlay();
+        btn.classList.remove('active'); opw.classList.remove('show');
+      }
+    }
+    // 键盘快捷键：H 开/关旧图
+    window.addEventListener('keydown', (e) => { if (e.key.toLowerCase()==='h') toggleHistoric(); });
+
+    /* ====== Routing helpers ====== */
+    function showSnack(msg){
+      const el = document.getElementById('snack');
+      el.textContent = msg;
+      el.classList.add('show');
+    }
+    function hideSnack(){
+      document.getElementById('snack').classList.remove('show');
+    }
+    function _profile(){
+      const v = document.getElementById('mode').value;
+      if (v === 'walking') return 'walking';
+      if (v === 'cycling') return 'cycling';
+      return 'driving';
+    }
+    function _lastStartFromRoute(){
+      const src = map.getSource('route');
+      if (!src) return null;
+      const fc = src._data || src._options?.data;
+      try{
+        const f = (fc.features||[])[0];
+        if (f && f.geometry && f.geometry.coordinates?.length) {
+          return f.geometry.coordinates[0];
+        }
+      }catch(_){}
+      return null;
+    }
+    async function routeTo(startLngLat, destLngLat){
+      if (!startLngLat || !destLngLat) return;
+      // add/update endpoint markers
+      addEndpointMarkers(startLngLat, destLngLat);
+
+      const prof = _profile();
+      const url = `https://api.mapbox.com/directions/v5/mapbox/${encodeURIComponent(prof)}/${startLngLat[0]},${startLngLat[1]};${destLngLat[0]},${destLngLat[1]}?geometries=geojson&overview=full&alternatives=false&access_token=${mapboxgl.accessToken}`;
+      try{
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.routes || !data.routes.length){ console.warn('No route'); return; }
+        const route = data.routes[0].geometry;
+        const feature = {
+          type:'Feature',
+          properties:{ profile: prof },
+          geometry: route
+        };
+        const fc = { type:'FeatureCollection', features:[feature] };
+        map.getSource('route').setData(fc);
+        // fit to route
+        const coords = route.coordinates;
+        const bounds = new mapboxgl.LngLatBounds(coords[0], coords[0]);
+        for (const c of coords) bounds.extend(c);
+        map.fitBounds(bounds, { padding: 80, duration: 900, maxZoom: 16 });
+      }catch(err){
+        console.error('Route error', err);
+      }
+    }
+    function addEndpointMarkers(start, dest){
+      // simple round markers for start/end
+      const startEl = document.createElement('div');
+      startEl.style.cssText = 'width:14px;height:14px;border:2px solid #111;border-radius:50%;background:#10b981;';
+      const destEl = document.createElement('div');
+      destEl.style.cssText = 'width:14px;height:14px;border:2px solid #111;border-radius:50%;background:#ef4444;';
+      if (originMarker) originMarker.remove();
+      if (destMarker) destMarker.remove();
+      originMarker = new mapboxgl.Marker({ element:startEl }).setLngLat(start).addTo(map);
+      destMarker = new mapboxgl.Marker({ element:destEl }).setLngLat(dest).addTo(map);
+    }
+    function clearRoute(){
+      const empty = { type:'FeatureCollection', features:[] };
+      if (map.getSource('route')) map.getSource('route').setData(empty);
+      if (originMarker) { originMarker.remove(); originMarker = null; }
+      if (destMarker) { destMarker.remove(); destMarker = null; }
+    }
+    function tryAutoNavigate(forceSnack=false){
+      if (!currentDestination) return;
+      if (userPosition){
+        routeTo(userPosition, currentDestination);
+      } else {
+        // no GPS yet: ask user to click the map to pick a start
+        pendingPickStart = true;
+        showSnack('Click the map to pick a start point (or press the GPS button)');
+        if (forceSnack) { /* already shown */ }
+      }
+    }
+  </script>
+</body>
+</html>
